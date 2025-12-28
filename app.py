@@ -1,4 +1,5 @@
 # app.py
+import os
 import sys
 from pathlib import Path
 import json
@@ -6,15 +7,22 @@ import re
 import streamlit as st
 import streamlit.components.v1 as components
 
+from crm_agent.product_agent.workflow import run_product_agent
+
 from datetime import datetime, date
 from decimal import Decimal
 
 from sqlalchemy import text, bindparam
 
-ROOT = Path(__file__).resolve().parent
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+# ROOT = Path(__file__).resolve().parent
+# SRC = ROOT / "src"
+# if str(SRC) not in sys.path:
+#     sys.path.insert(0, str(SRC))
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = os.path.join(BASE_DIR, "src")
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 
 from crm_agent.db.engine import SessionLocal
 from crm_agent.db.repo import Repo
@@ -24,6 +32,8 @@ from crm_agent.flow.workflow import run_until_candidates  # 후보 생성까지�
 # =========================
 # v2 UI embed helpers
 # =========================
+ROOT = Path(__file__).resolve().parent
+
 UI_ROOT = ROOT / "ui" / "v2"
 
 def render_v2(page: str, height: int = 900):
@@ -330,6 +340,7 @@ def main():
             "Step2 후보 생성(톤/타겟)",
             "Step3 후보/선택(템플릿 확정)",
             "Step4 승인(템플릿 승인/반려)",
+            "Step5 Product Agent(슬롯 채우기/발송 payload)",
             "Run 타임라인",
         ],
     )
@@ -701,6 +712,67 @@ def main():
                         st.caption(a["payload_json"]["comment"])
             else:
                 st.info("승인 이력이 없습니다.")
+        
+
+        # -------------------------
+# Step5
+# -------------------------
+        elif page == "Step5 Product Agent(슬롯 채우기/발송 payload)":
+            st.subheader("Step5) Product Agent 실행 (유저별 상품 추천 + 슬롯 채움 + send_logs 저장)")
+
+            if not run_id:
+                st.warning("좌측 run_id 입력 후 진행하세요.")
+                st.stop()
+
+            # ✅ 옵션은 버튼보다 먼저 선언(버튼 클릭 시 값이 반영되게)
+            top_k = st.number_input("상품 추천 Top-K", min_value=1, max_value=10, value=3, step=1)
+            ignore_opt_in = st.checkbox("테스트 모드(Opt-in 무시하고 렌더링)", value=True)
+            max_preview = st.number_input("미리보기 개수", min_value=1, max_value=30, value=10, step=1)
+
+            if st.button("▶ Product Agent 실행"):
+                # ✅ 옵션을 run_product_agent에 넘겨야 함
+                out = run_product_agent(
+                    run_id,
+                    top_k_products=int(top_k),
+                    ignore_opt_in=bool(ignore_opt_in),
+                    max_preview=int(max_preview),
+                )
+                st.success("완료: campaign_send_logs 저장 + EXECUTION_RESULT 생성")
+
+                st.markdown("### 요약(Product Agent summary)")
+                st.json(out.get("summary", {}), expanded=True)
+
+                # ✅ 2-3) DB에서 실제 rendered_text 가져와 출력
+                st.markdown("### 유저별 완성 메시지 미리보기 (campaign_send_logs)")
+
+                from sqlalchemy import text
+                import pandas as pd
+
+                rows = repo.db.execute(
+                    text("""
+                        SELECT user_id, status, rendered_text, error_code, error_message
+                        FROM campaign_send_logs
+                        WHERE run_id = :run_id
+                        ORDER BY created_at DESC
+                        LIMIT 50
+                    """),
+                    {"run_id": run_id},
+                ).mappings().all()
+
+                if rows:
+                    df = pd.DataFrame(rows)
+                    st.dataframe(df, use_container_width=True)
+                else:
+                    st.info("campaign_send_logs에 데이터가 없습니다.")
+
+            st.markdown("### 최신 EXECUTION_RESULT")
+            h = repo.get_latest_handoff(run_id, "EXECUTION_RESULT")
+            if h:
+                st.json(h["payload_json"], expanded=True)
+            else:
+                st.info("아직 EXECUTION_RESULT가 없습니다.")
+
+
 
         # -------------------------
         # Run Timeline

@@ -166,3 +166,6 @@ CREATE TABLE IF NOT EXISTS campaign_send_logs (
   CONSTRAINT fk_sendlogs_run FOREIGN KEY (run_id) REFERENCES campaign_runs(run_id)
     ON DELETE CASCADE
 ) ENGINE=InnoDB;
+
+ALTER TABLE campaign_send_logs
+MODIFY COLUMN status ENUM('CREATED', 'SENT', 'FAILED', 'SKIPPED', 'PREVIEW') NOT NULL DEFAULT 'CREATED';
